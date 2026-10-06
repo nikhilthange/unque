@@ -15,124 +15,36 @@ import {
 } from 'react-native';
 import io from 'socket.io-client';
 
-const getInitialServerUrl = () => {
+const resolveDefaultHost = () => {
   if (Platform.OS === 'android') {
     return 'http://10.0.2.2:5000';
   }
   return 'http://localhost:5000';
 };
 
-export default function App() {
-  const [serverUrl, setServerUrl] = useState(getInitialServerUrl());
-  const [tempUrl, setTempUrl] = useState(serverUrl);
-  const [modalOpen, setModalOpen] = useState(false);
-
-  const [leads, setLeads] = useState([]);
-  const [status, setStatus] = useState('connecting'); // connected | connecting | disconnected
-  const [refreshing, setRefreshing] = useState(false);
-  const [activeLeadId, setActiveLeadId] = useState(null);
-
-  const blinkAnim = useRef(new Animated.Value(1)).current;
-  const socketRef = useRef(null);
+// Animated Card for incoming leads with smooth fade-in and highlight
+function LeadCard({ item, isLatest }) {
+  const fadeAnim = useRef(new Animated.Value(isLatest ? 0.3 : 1)).current;
+  const slideAnim = useRef(new Animated.Value(isLatest ? -12 : 0)).current;
 
   useEffect(() => {
-    const blink = Animated.loop(
-      Animated.sequence([
-        Animated.timing(blinkAnim, {
-          toValue: 0.3,
-          duration: 800,
-          useNativeDriver: true,
-        }),
-        Animated.timing(blinkAnim, {
+    if (isLatest) {
+      Animated.parallel([
+        Animated.timing(fadeAnim, {
           toValue: 1,
-          duration: 800,
+          duration: 400,
           useNativeDriver: true,
         }),
-      ])
-    );
-    blink.start();
-    return () => blink.stop();
-  }, [blinkAnim]);
-
-  useEffect(() => {
-    setStatus('connecting');
-
-    if (socketRef.current) {
-      socketRef.current.disconnect();
+        Animated.timing(slideAnim, {
+          toValue: 0,
+          duration: 400,
+          useNativeDriver: true,
+        }),
+      ]).start();
     }
+  }, [isLatest, fadeAnim, slideAnim]);
 
-    const socket = io(serverUrl, {
-      transports: ['websocket', 'polling'],
-      reconnectionAttempts: 15,
-      reconnectionDelay: 1000,
-      timeout: 10000,
-    });
-
-    socketRef.current = socket;
-
-    socket.on('connect', () => {
-      setStatus('connected');
-      loadLeads(serverUrl);
-    });
-
-    socket.on('disconnect', () => {
-      setStatus('disconnected');
-    });
-
-    socket.on('connect_error', () => {
-      setStatus('disconnected');
-    });
-
-    // Handle real-time lead arrival without any user interaction
-    socket.on('new_lead', (newLead) => {
-      setActiveLeadId(newLead.leadgen_id);
-
-      setLeads((prev) => {
-        const found = prev.some((l) => l.leadgen_id === newLead.leadgen_id);
-        if (found) {
-          return prev.map((l) => (l.leadgen_id === newLead.leadgen_id ? newLead : l));
-        }
-        return [newLead, ...prev];
-      });
-    });
-
-    socket.on('leads_cleared', () => {
-      setLeads([]);
-    });
-
-    return () => {
-      socket.disconnect();
-    };
-  }, [serverUrl]);
-
-  const loadLeads = async (url) => {
-    try {
-      const res = await fetch(`${url}/api/leads`);
-      const data = await res.json();
-      if (data && data.success && Array.isArray(data.leads)) {
-        setLeads(data.leads);
-      }
-    } catch (err) {
-      console.log('Error loading leads:', err.message);
-    }
-  };
-
-  const onRefresh = async () => {
-    setRefreshing(true);
-    await loadLeads(serverUrl);
-    setRefreshing(false);
-  };
-
-  const saveUrl = () => {
-    let clean = tempUrl.trim();
-    if (!clean.startsWith('http://') && !clean.startsWith('https://')) {
-      clean = `http://${clean}`;
-    }
-    setServerUrl(clean);
-    setModalOpen(false);
-  };
-
-  const formatTime = (iso) => {
+  const formatTimestamp = (iso) => {
     if (!iso) return 'Just now';
     try {
       const d = new Date(iso);
@@ -143,166 +55,339 @@ export default function App() {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#0f172a" />
+    <Animated.View
+      style={[
+        styles.card,
+        isLatest && styles.cardHighlighted,
+        { opacity: fadeAnim, transform: [{ translateY: slideAnim }] },
+      ]}
+    >
+      {/* Top Header Row */}
+      <View style={styles.cardHeader}>
+        <View style={styles.nameBlock}>
+          <Text style={styles.leadName}>{item.fullName || 'Lead Submission'}</Text>
+          {isLatest && (
+            <View style={styles.newBadge}>
+              <Text style={styles.newBadgeText}>NEW</Text>
+            </View>
+          )}
+        </View>
+        <Text style={styles.timeLabel}>{formatTimestamp(item.received_at || item.created_time)}</Text>
+      </View>
 
-      {/* Header */}
-      <View style={styles.header}>
-        <View>
-          <Text style={styles.title}>Leads Dashboard</Text>
-          <Text style={styles.subtitle}>Meta Lead Ads Live Sync</Text>
+      {/* Meta Ad Source Tag */}
+      <View style={styles.sourceTag}>
+        <Text style={styles.sourceText}>
+          {item.source || 'Meta Lead Ad'} • Form: {item.form_id || 'Instant Form'}
+        </Text>
+      </View>
+
+      {/* Contact Details */}
+      <View style={styles.contactSection}>
+        <View style={styles.dataRow}>
+          <Text style={styles.dataLabel}>Email</Text>
+          <Text style={styles.dataValue} numberOfLines={1}>
+            {item.email || 'No email provided'}
+          </Text>
         </View>
 
-        <View style={styles.headerRight}>
+        <View style={styles.dataRow}>
+          <Text style={styles.dataLabel}>Phone</Text>
+          <Text style={styles.dataValue}>{item.phoneNumber || 'No phone provided'}</Text>
+        </View>
+      </View>
+
+      {/* Custom Questions / Form Answers */}
+      {item.customFields && Object.keys(item.customFields).length > 0 && (
+        <View style={styles.customGrid}>
+          {Object.entries(item.customFields).map(([k, v]) => (
+            <View key={k} style={styles.customChip}>
+              <Text style={styles.customChipKey}>{k}: </Text>
+              <Text style={styles.customChipVal}>{String(v)}</Text>
+            </View>
+          ))}
+        </View>
+      )}
+
+      {/* Card Footer with Meta Leadgen ID */}
+      <View style={styles.cardFooter}>
+        <Text style={styles.idText}>ID: {item.leadgen_id}</Text>
+        {item.page_id ? <Text style={styles.pageText}>Page: {item.page_id}</Text> : null}
+      </View>
+    </Animated.View>
+  );
+}
+
+export default function App() {
+  const [serverUrl, setServerUrl] = useState(resolveDefaultHost());
+  const [tempUrl, setTempUrl] = useState(serverUrl);
+  const [isConfigOpen, setIsConfigOpen] = useState(false);
+
+  const [leads, setLeads] = useState([]);
+  const [connectionStatus, setConnectionStatus] = useState('connecting'); // connected | connecting | disconnected
+  const [refreshing, setRefreshing] = useState(false);
+  const [latestLeadId, setLatestLeadId] = useState(null);
+
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+  const socketRef = useRef(null);
+
+  // Pulse animation for LIVE indicator dot
+  useEffect(() => {
+    const pulse = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, {
+          toValue: 0.35,
+          duration: 750,
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulseAnim, {
+          toValue: 1,
+          duration: 750,
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    pulse.start();
+    return () => pulse.stop();
+  }, [pulseAnim]);
+
+  // Socket.IO lifecycle
+  useEffect(() => {
+    setConnectionStatus('connecting');
+
+    if (socketRef.current) {
+      socketRef.current.disconnect();
+    }
+
+    const socket = io(serverUrl, {
+      transports: ['websocket', 'polling'],
+      reconnectionAttempts: 20,
+      reconnectionDelay: 1000,
+      timeout: 10000,
+    });
+
+    socketRef.current = socket;
+
+    socket.on('connect', () => {
+      setConnectionStatus('connected');
+      fetchLeads(serverUrl);
+    });
+
+    socket.on('disconnect', () => {
+      setConnectionStatus('disconnected');
+    });
+
+    socket.on('connect_error', () => {
+      setConnectionStatus('disconnected');
+    });
+
+    // Zero-Touch Event: New lead received from Meta webhook broadcast
+    socket.on('new_lead', (newLead) => {
+      setLatestLeadId(newLead.leadgen_id);
+
+      setLeads((prev) => {
+        const exists = prev.some((l) => l.leadgen_id === newLead.leadgen_id);
+        if (exists) {
+          return prev.map((l) => (l.leadgen_id === newLead.leadgen_id ? newLead : l));
+        }
+        return [newLead, ...prev];
+      });
+    });
+
+    socket.on('leads_cleared', () => {
+      setLeads([]);
+      setLatestLeadId(null);
+    });
+
+    return () => {
+      socket.disconnect();
+    };
+  }, [serverUrl]);
+
+  const fetchLeads = async (url) => {
+    try {
+      const res = await fetch(`${url}/api/leads`);
+      const data = await res.json();
+      if (data && data.success && Array.isArray(data.leads)) {
+        setLeads(data.leads);
+      }
+    } catch {
+      // Offline fallback
+    }
+  };
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    await fetchLeads(serverUrl);
+    setRefreshing(false);
+  };
+
+  const clearAllLeads = async () => {
+    try {
+      await fetch(`${serverUrl}/api/leads`, { method: 'DELETE' });
+      setLeads([]);
+      setLatestLeadId(null);
+    } catch {
+      setLeads([]);
+    }
+  };
+
+  const handleSaveUrl = () => {
+    let clean = tempUrl.trim();
+    if (!clean.startsWith('http://') && !clean.startsWith('https://')) {
+      clean = `http://${clean}`;
+    }
+    setServerUrl(clean);
+    setIsConfigOpen(false);
+  };
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <StatusBar barStyle="light-content" backgroundColor="#0B1120" />
+
+      {/* Main Top Navigation Bar */}
+      <View style={styles.navBar}>
+        <View style={styles.navLeft}>
+          <Text style={styles.brandTitle}>LeadStream</Text>
+          <Text style={styles.brandSubtitle}>Meta Lead Ads Live Sync</Text>
+        </View>
+
+        <View style={styles.navRight}>
+          {/* Status Badge with Live Dot */}
           <View
             style={[
-              styles.badge,
-              status === 'connected'
-                ? styles.badgeOnline
-                : status === 'connecting'
-                ? styles.badgeWarning
-                : styles.badgeOffline,
+              styles.statusPill,
+              connectionStatus === 'connected'
+                ? styles.pillOnline
+                : connectionStatus === 'connecting'
+                ? styles.pillConnecting
+                : styles.pillOffline,
             ]}
           >
             <Animated.View
               style={[
-                styles.dot,
-                status === 'connected'
+                styles.statusDot,
+                connectionStatus === 'connected'
                   ? styles.dotOnline
-                  : status === 'connecting'
-                  ? styles.dotWarning
+                  : connectionStatus === 'connecting'
+                  ? styles.dotConnecting
                   : styles.dotOffline,
-                status === 'connected' ? { opacity: blinkAnim } : null,
+                connectionStatus === 'connected' ? { opacity: pulseAnim } : null,
               ]}
             />
-            <Text style={styles.badgeText}>
-              {status === 'connected' ? 'LIVE' : status === 'connecting' ? 'SYNCING' : 'OFFLINE'}
+            <Text style={styles.statusLabel}>
+              {connectionStatus === 'connected'
+                ? 'LIVE'
+                : connectionStatus === 'connecting'
+                ? 'CONNECTING'
+                : 'OFFLINE'}
             </Text>
           </View>
 
+          {/* Config Settings Button */}
           <TouchableOpacity
-            style={styles.configBtn}
+            style={styles.headerBtn}
             onPress={() => {
               setTempUrl(serverUrl);
-              setModalOpen(true);
+              setIsConfigOpen(true);
             }}
           >
-            <Text style={styles.configBtnText}>Config</Text>
+            <Text style={styles.headerBtnText}>Config</Text>
           </TouchableOpacity>
         </View>
       </View>
 
-      {/* Subheader info */}
-      <View style={styles.subBar}>
-        <Text style={styles.countText}>Total: {leads.length} leads</Text>
-        <Text style={styles.hintText}>Real-time push enabled</Text>
+      {/* Stats & Actions Subheader */}
+      <View style={styles.subHeader}>
+        <Text style={styles.statsCount}>
+          Active Leads: <Text style={styles.statsCountHighlight}>{leads.length}</Text>
+        </Text>
+        <View style={styles.subHeaderActions}>
+          {leads.length > 0 && (
+            <TouchableOpacity onPress={clearAllLeads} style={styles.clearBtn}>
+              <Text style={styles.clearBtnText}>Clear List</Text>
+            </TouchableOpacity>
+          )}
+        </View>
       </View>
 
-      {/* Leads List */}
+      {/* Leads Feed */}
       <FlatList
         data={leads}
         keyExtractor={(item) => String(item.leadgen_id || Math.random())}
-        contentContainerStyle={leads.length === 0 ? styles.emptyWrap : styles.listWrap}
+        extraData={latestLeadId}
+        contentContainerStyle={leads.length === 0 ? styles.emptyContainer : styles.listContent}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#38bdf8" />
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+            tintColor="#38BDF8"
+            colors={['#38BDF8']}
+          />
         }
-        renderItem={({ item }) => {
-          const isLatest = item.leadgen_id === activeLeadId;
-
-          return (
-            <View style={[styles.card, isLatest && styles.cardActive]}>
-              <View style={styles.cardTop}>
-                <View style={styles.nameWrap}>
-                  <Text style={styles.leadName}>{item.fullName || 'New Lead'}</Text>
-                  {isLatest && (
-                    <View style={styles.newTag}>
-                      <Text style={styles.newTagText}>NEW</Text>
-                    </View>
-                  )}
-                </View>
-                <Text style={styles.timeText}>{formatTime(item.received_at || item.created_time)}</Text>
-              </View>
-
-              <Text style={styles.sourceText}>Source: {item.source || 'Meta Lead Ad'}</Text>
-
-              <View style={styles.infoRow}>
-                <Text style={styles.infoLabel}>Email:</Text>
-                <Text style={styles.infoValue}>{item.email || 'N/A'}</Text>
-              </View>
-
-              <View style={styles.infoRow}>
-                <Text style={styles.infoLabel}>Phone:</Text>
-                <Text style={styles.infoValue}>{item.phoneNumber || 'N/A'}</Text>
-              </View>
-
-              {item.customFields && Object.keys(item.customFields).length > 0 && (
-                <View style={styles.customBox}>
-                  {Object.entries(item.customFields).map(([k, v]) => (
-                    <Text key={k} style={styles.customItem}>
-                      <Text style={styles.customKey}>{k}: </Text>
-                      {String(v)}
-                    </Text>
-                  ))}
-                </View>
-              )}
-
-              <View style={styles.cardBottom}>
-                <Text style={styles.leadId}>ID: {item.leadgen_id}</Text>
-                {item.form_id ? <Text style={styles.formId}>Form: {item.form_id}</Text> : null}
-              </View>
-            </View>
-          );
-        }}
+        renderItem={({ item }) => (
+          <LeadCard item={item} isLatest={item.leadgen_id === latestLeadId} />
+        )}
         ListEmptyComponent={
-          <View style={styles.emptyBox}>
-            <Text style={styles.emptyTitle}>Waiting for submissions</Text>
-            <Text style={styles.emptyDesc}>
-              Submit a test lead via Meta's Lead Ads Testing Tool.
-              The entry will pop up here instantly without touching your phone.
+          <View style={styles.emptyView}>
+            <View style={styles.emptyCircle}>
+              <Text style={styles.emptySignal}>●</Text>
+            </View>
+            <Text style={styles.emptyHeader}>Listening for Submissions</Text>
+            <Text style={styles.emptySubtext}>
+              Submit a lead using Meta's Lead Ads Testing Tool. Incoming leads will appear here in real
+              time without touching this device.
             </Text>
-            <Text style={styles.serverLabel}>Backend: {serverUrl}</Text>
+            <View style={styles.urlPill}>
+              <Text style={styles.urlPillText}>{serverUrl}</Text>
+            </View>
           </View>
         }
       />
 
-      {/* URL Settings Modal */}
-      <Modal visible={modalOpen} transparent animationType="fade">
-        <View style={styles.modalBg}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalHeading}>Backend Server URL</Text>
-            <Text style={styles.modalDesc}>Configure backend address for simulator or local device:</Text>
+      {/* Server Configuration Modal */}
+      <Modal visible={isConfigOpen} transparent animationType="fade">
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Backend Connection</Text>
+            <Text style={styles.modalDescription}>
+              Set the backend IP or tunnel URL for your environment:
+            </Text>
 
             <TextInput
-              style={styles.modalInput}
+              style={styles.urlInput}
               value={tempUrl}
               onChangeText={setTempUrl}
               autoCapitalize="none"
               autoCorrect={false}
-              placeholder="http://192.168.1.5:5000"
-              placeholderTextColor="#64748b"
+              placeholder="http://192.168.1.10:5000"
+              placeholderTextColor="#64748B"
             />
 
-            <View style={styles.presetButtons}>
+            <View style={styles.presetGroup}>
               <TouchableOpacity
-                style={styles.presetBtn}
+                style={styles.presetPill}
                 onPress={() => setTempUrl('http://localhost:5000')}
               >
-                <Text style={styles.presetBtnText}>localhost:5000</Text>
+                <Text style={styles.presetPillText}>localhost:5000</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={styles.presetBtn}
+                style={styles.presetPill}
                 onPress={() => setTempUrl('http://10.0.2.2:5000')}
               >
-                <Text style={styles.presetBtnText}>10.0.2.2:5000 (Android)</Text>
+                <Text style={styles.presetPillText}>10.0.2.2:5000 (Android)</Text>
               </TouchableOpacity>
             </View>
 
-            <View style={styles.modalFooter}>
-              <TouchableOpacity style={styles.cancelBtn} onPress={() => setModalOpen(false)}>
-                <Text style={styles.cancelBtnText}>Cancel</Text>
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={styles.cancelModalBtn}
+                onPress={() => setIsConfigOpen(false)}
+              >
+                <Text style={styles.cancelModalText}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.saveBtn} onPress={saveUrl}>
-                <Text style={styles.saveBtnText}>Connect</Text>
+              <TouchableOpacity style={styles.connectModalBtn} onPress={handleSaveUrl}>
+                <Text style={styles.connectModalText}>Save & Connect</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -315,294 +400,369 @@ export default function App() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0f172a',
+    backgroundColor: '#090D16',
   },
-  header: {
+  navBar: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 16,
+    paddingHorizontal: 18,
     paddingVertical: 14,
     borderBottomWidth: 1,
-    borderBottomColor: '#1e293b',
-    backgroundColor: '#0f172a',
+    borderBottomColor: '#1A2338',
+    backgroundColor: '#0E1527',
   },
-  title: {
+  navLeft: {
+    flex: 1,
+  },
+  brandTitle: {
     fontSize: 20,
-    fontWeight: '700',
-    color: '#f8fafc',
+    fontWeight: '800',
+    color: '#F8FAFC',
+    letterSpacing: -0.3,
   },
-  subtitle: {
+  brandSubtitle: {
     fontSize: 12,
-    color: '#94a3b8',
+    color: '#94A3B8',
     marginTop: 2,
+    fontWeight: '500',
   },
-  headerRight: {
+  navRight: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
   },
-  badge: {
+  statusPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
     borderRadius: 6,
     borderWidth: 1,
   },
-  badgeOnline: {
-    borderColor: '#10b981',
-    backgroundColor: 'rgba(16, 185, 129, 0.1)',
+  pillOnline: {
+    borderColor: '#10B981',
+    backgroundColor: 'rgba(16, 185, 129, 0.12)',
   },
-  badgeWarning: {
-    borderColor: '#f59e0b',
-    backgroundColor: 'rgba(245, 158, 11, 0.1)',
+  pillConnecting: {
+    borderColor: '#F59E0B',
+    backgroundColor: 'rgba(245, 158, 11, 0.12)',
   },
-  badgeOffline: {
-    borderColor: '#ef4444',
-    backgroundColor: 'rgba(239, 68, 68, 0.1)',
+  pillOffline: {
+    borderColor: '#EF4444',
+    backgroundColor: 'rgba(239, 68, 68, 0.12)',
   },
-  dot: {
+  statusDot: {
     width: 6,
     height: 6,
     borderRadius: 3,
     marginRight: 6,
   },
-  dotOnline: { backgroundColor: '#10b981' },
-  dotWarning: { backgroundColor: '#f59e0b' },
-  dotOffline: { backgroundColor: '#ef4444' },
-  badgeText: {
+  dotOnline: { backgroundColor: '#10B981' },
+  dotConnecting: { backgroundColor: '#F59E0B' },
+  dotOffline: { backgroundColor: '#EF4444' },
+  statusLabel: {
     fontSize: 11,
-    fontWeight: '600',
-    color: '#f8fafc',
+    fontWeight: '700',
+    color: '#F8FAFC',
+    letterSpacing: 0.5,
   },
-  configBtn: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    backgroundColor: '#1e293b',
+  headerBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
     borderRadius: 6,
+    backgroundColor: '#1E293B',
+    borderWidth: 1,
+    borderColor: '#334155',
   },
-  configBtnText: {
+  headerBtnText: {
     fontSize: 12,
-    color: '#cbd5e1',
+    color: '#CBD5E1',
+    fontWeight: '600',
   },
-  subBar: {
+  subHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingHorizontal: 16,
+    alignItems: 'center',
+    paddingHorizontal: 18,
     paddingVertical: 10,
-    backgroundColor: '#1e293b',
+    backgroundColor: '#0F172A',
     borderBottomWidth: 1,
-    borderBottomColor: '#334155',
+    borderBottomColor: '#1E293B',
   },
-  countText: {
+  statsCount: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#94a3b8',
+    color: '#94A3B8',
   },
-  hintText: {
+  statsCountHighlight: {
+    color: '#38BDF8',
+    fontWeight: '800',
+  },
+  subHeaderActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  clearBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  clearBtnText: {
     fontSize: 12,
-    color: '#38bdf8',
+    color: '#64748B',
+    fontWeight: '600',
   },
-  listWrap: {
+  listContent: {
     padding: 16,
-    paddingBottom: 32,
+    paddingBottom: 40,
   },
-  emptyWrap: {
+  emptyContainer: {
     flexGrow: 1,
     justifyContent: 'center',
     alignItems: 'center',
     padding: 24,
   },
   card: {
-    backgroundColor: '#1e293b',
-    borderRadius: 10,
-    padding: 14,
+    backgroundColor: '#111827',
+    borderRadius: 12,
+    padding: 15,
     marginBottom: 12,
     borderWidth: 1,
-    borderColor: '#334155',
+    borderColor: '#1F2937',
   },
-  cardActive: {
-    borderColor: '#38bdf8',
-    backgroundColor: '#1e293b',
+  cardHighlighted: {
+    borderColor: '#38BDF8',
+    borderWidth: 1.5,
+    backgroundColor: '#131D33',
   },
-  cardTop: {
+  cardHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 6,
   },
-  nameWrap: {
+  nameBlock: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+    flex: 1,
   },
   leadName: {
     fontSize: 16,
     fontWeight: '700',
-    color: '#f8fafc',
+    color: '#F8FAFC',
   },
-  newTag: {
-    backgroundColor: '#0284c7',
+  newBadge: {
+    backgroundColor: '#0284C7',
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 4,
   },
-  newTagText: {
+  newBadgeText: {
+    color: '#FFFFFF',
     fontSize: 10,
-    fontWeight: '700',
-    color: '#ffffff',
+    fontWeight: '800',
+    letterSpacing: 0.5,
   },
-  timeText: {
+  timeLabel: {
     fontSize: 12,
-    color: '#64748b',
+    color: '#64748B',
+    fontWeight: '500',
+  },
+  sourceTag: {
+    marginBottom: 12,
   },
   sourceText: {
-    fontSize: 12,
-    color: '#64748b',
-    marginBottom: 8,
+    fontSize: 11,
+    color: '#64748B',
+    fontWeight: '500',
   },
-  infoRow: {
-    flexDirection: 'row',
+  contactSection: {
+    marginBottom: 10,
     gap: 6,
-    marginBottom: 4,
   },
-  infoLabel: {
+  dataRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  dataLabel: {
+    width: 52,
+    fontSize: 12,
+    color: '#64748B',
+    fontWeight: '600',
+  },
+  dataValue: {
+    flex: 1,
     fontSize: 13,
-    color: '#64748b',
-    width: 48,
+    color: '#E2E8F0',
+    fontWeight: '500',
   },
-  infoValue: {
-    fontSize: 13,
-    color: '#e2e8f0',
-  },
-  customBox: {
+  customGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
     marginTop: 8,
     paddingTop: 8,
     borderTopWidth: 1,
-    borderTopColor: '#334155',
+    borderTopColor: '#1F2937',
   },
-  customItem: {
-    fontSize: 12,
-    color: '#cbd5e1',
-    marginBottom: 2,
+  customChip: {
+    flexDirection: 'row',
+    backgroundColor: '#0B1120',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: '#1E293B',
   },
-  customKey: {
-    color: '#64748b',
+  customChipKey: {
+    fontSize: 11,
+    color: '#64748B',
+    fontWeight: '600',
   },
-  cardBottom: {
+  customChipVal: {
+    fontSize: 11,
+    color: '#CBD5E1',
+    fontWeight: '500',
+  },
+  cardFooter: {
     marginTop: 10,
     paddingTop: 8,
     borderTopWidth: 1,
-    borderTopColor: '#334155',
+    borderTopColor: '#1F2937',
     flexDirection: 'row',
     justifyContent: 'space-between',
+    alignItems: 'center',
   },
-  leadId: {
+  idText: {
     fontSize: 11,
-    color: '#64748b',
+    color: '#475569',
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
-  formId: {
+  pageText: {
     fontSize: 11,
-    color: '#64748b',
+    color: '#475569',
   },
-  emptyBox: {
+  emptyView: {
     alignItems: 'center',
     maxWidth: 320,
   },
-  emptyTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#f8fafc',
-    marginBottom: 8,
+  emptyCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#1E293B',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 14,
   },
-  emptyDesc: {
+  emptySignal: {
+    color: '#38BDF8',
+    fontSize: 14,
+  },
+  emptyHeader: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#F8FAFC',
+    marginBottom: 6,
+  },
+  emptySubtext: {
     fontSize: 13,
-    color: '#94a3b8',
+    color: '#94A3B8',
     textAlign: 'center',
     lineHeight: 18,
     marginBottom: 16,
   },
-  serverLabel: {
-    fontSize: 11,
-    color: '#64748b',
+  urlPill: {
+    backgroundColor: '#111827',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#1E293B',
   },
-  modalBg: {
+  urlPillText: {
+    fontSize: 11,
+    color: '#64748B',
+  },
+  modalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.7)',
+    backgroundColor: 'rgba(0, 0, 0, 0.75)',
     justifyContent: 'center',
     alignItems: 'center',
     padding: 20,
   },
-  modalContent: {
+  modalCard: {
     width: '100%',
     maxWidth: 360,
-    backgroundColor: '#1e293b',
+    backgroundColor: '#0F172A',
     borderRadius: 12,
     padding: 18,
     borderWidth: 1,
-    borderColor: '#334155',
+    borderColor: '#1E293B',
   },
-  modalHeading: {
-    fontSize: 16,
+  modalTitle: {
+    fontSize: 17,
     fontWeight: '700',
-    color: '#f8fafc',
+    color: '#F8FAFC',
     marginBottom: 4,
   },
-  modalDesc: {
+  modalDescription: {
     fontSize: 12,
-    color: '#94a3b8',
-    marginBottom: 12,
+    color: '#94A3B8',
+    marginBottom: 14,
+    lineHeight: 17,
   },
-  modalInput: {
-    backgroundColor: '#0f172a',
+  urlInput: {
+    backgroundColor: '#090D16',
     borderWidth: 1,
-    borderColor: '#334155',
+    borderColor: '#1E293B',
     borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    color: '#f8fafc',
+    color: '#F8FAFC',
     fontSize: 14,
     marginBottom: 12,
   },
-  presetButtons: {
+  presetGroup: {
     flexDirection: 'row',
     gap: 8,
     marginBottom: 16,
   },
-  presetBtn: {
-    backgroundColor: '#334155',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 4,
+  presetPill: {
+    backgroundColor: '#1E293B',
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 5,
   },
-  presetBtnText: {
+  presetPillText: {
     fontSize: 11,
-    color: '#cbd5e1',
+    color: '#CBD5E1',
+    fontWeight: '600',
   },
-  modalFooter: {
+  modalButtons: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
-    gap: 8,
+    gap: 10,
   },
-  cancelBtn: {
+  cancelModalBtn: {
     paddingHorizontal: 12,
     paddingVertical: 8,
   },
-  cancelBtnText: {
-    color: '#94a3b8',
+  cancelModalText: {
+    color: '#94A3B8',
     fontSize: 13,
+    fontWeight: '600',
   },
-  saveBtn: {
-    backgroundColor: '#0284c7',
-    paddingHorizontal: 14,
+  connectModalBtn: {
+    backgroundColor: '#0284C7',
+    paddingHorizontal: 16,
     paddingVertical: 8,
     borderRadius: 6,
   },
-  saveBtnText: {
-    color: '#ffffff',
+  connectModalText: {
+    color: '#FFFFFF',
     fontSize: 13,
-    fontWeight: '600',
+    fontWeight: '700',
   },
 });
