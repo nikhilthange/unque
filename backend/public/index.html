@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Meta Lead Ads + React Native Real-Time PoC</title>
+  <script src="/socket.io/socket.io.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: #060913;
+      color: #e2e8f0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      background: #0f172a;
+      border-bottom: 1px solid #1e293b;
+      padding: 14px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .header-title { font-size: 17px; font-weight: 700; color: #f8fafc; }
+    .header-badge {
+      font-size: 12px;
+      background: rgba(56, 189, 248, 0.15);
+      color: #38bdf8;
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-weight: 600;
+    }
+
+    .main-grid {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 24px;
+      padding: 24px;
+      max-width: 1440px;
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    /* Left Panel: Meta Lead Testing Tool */
+    .meta-panel {
+      background: #0d1322;
+      border: 1px solid #1e293b;
+      border-radius: 12px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .meta-panel-header {
+      background: #151d30;
+      border-bottom: 1px solid #1e293b;
+      padding: 16px 20px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .meta-logo {
+      background: #0064e0;
+      color: white;
+      font-weight: 900;
+      padding: 4px 8px;
+      border-radius: 6px;
+      font-size: 13px;
+    }
+    .meta-panel-title { font-size: 15px; font-weight: 700; color: #f8fafc; }
+    .meta-panel-body { padding: 20px; display: flex; flex-direction: column; gap: 16px; flex: 1; }
+
+    .form-group { display: flex; flex-direction: column; gap: 6px; }
+    .form-label { font-size: 12px; font-weight: 600; color: #94a3b8; }
+    .form-input, .form-select {
+      background: #090e1a;
+      border: 1px solid #1e293b;
+      border-radius: 8px;
+      padding: 10px 14px;
+      color: #f8fafc;
+      font-size: 14px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .form-input:focus, .form-select:focus { border-color: #0064e0; }
+
+    .submit-btn {
+      background: #0064e0;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      padding: 12px 18px;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: background 0.2s, transform 0.1s;
+      margin-top: 6px;
+    }
+    .submit-btn:hover { background: #0052ba; }
+    .submit-btn:active { transform: scale(0.98); }
+
+    .log-terminal {
+      background: #050811;
+      border: 1px solid #1e293b;
+      border-radius: 8px;
+      padding: 14px;
+      font-family: ui-monospace, Menlo, Monaco, Consolas, monospace;
+      font-size: 11px;
+      color: #94a3b8;
+      max-height: 180px;
+      overflow-y: auto;
+      margin-top: 8px;
+    }
+    .log-line { margin-bottom: 4px; line-height: 1.4; }
+    .log-time { color: #64748b; margin-right: 6px; }
+    .log-ok { color: #10b981; }
+    .log-info { color: #38bdf8; }
+
+    /* Right Panel: Smartphone Preview Frame */
+    .phone-container {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    .phone-mockup {
+      width: 360px;
+      height: 680px;
+      background: #090d16;
+      border: 10px solid #1e293b;
+      border-radius: 40px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7);
+      position: relative;
+    }
+    .phone-notch {
+      width: 140px;
+      height: 20px;
+      background: #1e293b;
+      align-self: center;
+      border-bottom-left-radius: 12px;
+      border-bottom-right-radius: 12px;
+      z-index: 10;
+    }
+
+    /* App Header inside phone */
+    .app-header {
+      background: #0e1527;
+      border-bottom: 1px solid #1a2338;
+      padding: 12px 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .app-title { font-size: 17px; font-weight: 800; color: #f8fafc; }
+    .app-sub { font-size: 10px; color: #94a3b8; }
+    
+    .status-pill {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      padding: 4px 8px;
+      border-radius: 6px;
+      font-size: 10px;
+      font-weight: 700;
+      background: rgba(16, 185, 129, 0.12);
+      border: 1px solid #10b981;
+      color: #10b981;
+    }
+    .pulse-dot {
+      width: 6px;
+      height: 6px;
+      background: #10b981;
+      border-radius: 50%;
+      animation: pulse 1.5s infinite;
+    }
+    @keyframes pulse {
+      0% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.3; transform: scale(0.85); }
+      100% { opacity: 1; transform: scale(1); }
+    }
+
+    .app-subbar {
+      background: #0f172a;
+      border-bottom: 1px solid #1e293b;
+      padding: 8px 16px;
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      color: #94a3b8;
+      font-weight: 600;
+    }
+    .app-subbar span { color: #38bdf8; font-weight: 800; }
+
+    /* Feed inside phone */
+    .app-feed {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .lead-card {
+      background: #111827;
+      border: 1px solid #1f2937;
+      border-radius: 10px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      animation: slideIn 0.35s ease-out;
+    }
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateY(-12px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .lead-card.new {
+      border-color: #38bdf8;
+      background: #131d33;
+    }
+
+    .card-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .card-name { font-size: 14px; font-weight: 700; color: #f8fafc; display: flex; align-items: center; gap: 6px; }
+    .card-new-tag {
+      background: #0284c7;
+      color: white;
+      font-size: 9px;
+      font-weight: 800;
+      padding: 2px 5px;
+      border-radius: 4px;
+    }
+    .card-time { font-size: 10px; color: #64748b; }
+    .card-source { font-size: 10px; color: #64748b; margin-bottom: 4px; }
+
+    .card-row { display: flex; font-size: 11px; gap: 4px; }
+    .card-lbl { color: #64748b; width: 44px; font-weight: 600; }
+    .card-val { color: #e2e8f0; }
+
+    .card-foot {
+      margin-top: 6px;
+      padding-top: 6px;
+      border-top: 1px solid #1f2937;
+      display: flex;
+      justify-content: space-between;
+      font-size: 9px;
+      color: #475569;
+      font-family: monospace;
+    }
+
+    .empty-placeholder {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 24px;
+      color: #64748b;
+    }
+    .empty-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: #1e293b;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #38bdf8;
+      font-size: 12px;
+      margin-bottom: 12px;
+    }
+    .empty-h { font-size: 14px; font-weight: 700; color: #f8fafc; margin-bottom: 6px; }
+    .empty-p { font-size: 11px; line-height: 1.5; color: #94a3b8; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="header-title">Meta Lead Ads → React Native Real-Time PoC</div>
+    <div class="header-badge" id="connStatus">WebSocket: Connecting...</div>
+  </header>
+
+  <div class="main-grid">
+    <!-- Left: Meta Lead Ads Testing Tool -->
+    <div class="meta-panel">
+      <div class="meta-panel-header">
+        <span class="meta-logo">Meta</span>
+        <span class="meta-panel-title">Lead Ads Testing Tool (Simulator)</span>
+      </div>
+      <div class="meta-panel-body">
+        <div class="form-group">
+          <label class="form-label">Facebook Page</label>
+          <select class="form-select" id="pageSelect">
+            <option>Acme Innovations (ID: 1098234857234)</option>
+            <option>TechCorp Global (ID: 22093848123)</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Lead Ad Form</label>
+          <select class="form-select" id="formSelect">
+            <option>Product Inquiry Form 2026 (ID: 876543210987)</option>
+            <option>Developer Program Sign Up (ID: 4410293847)</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Lead Full Name</label>
+          <input type="text" class="form-input" id="leadName" value="Alex Rivera" placeholder="Full name">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Email Address</label>
+          <input type="email" class="form-input" id="leadEmail" value="alex.rivera@example.com" placeholder="Email">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Phone Number</label>
+          <input type="text" class="form-input" id="leadPhone" value="+1 (555) 439-0199" placeholder="Phone">
+        </div>
+
+        <button class="submit-btn" id="submitLeadBtn">
+          <span>Create Lead (Trigger Meta Webhook)</span>
+        </button>
+
+        <div class="form-label" style="margin-top: 6px;">Webhook Transmission Log</div>
+        <div class="log-terminal" id="terminalLogs">
+          <div class="log-line"><span class="log-time">[Ready]</span> Initialized Meta Webhook simulator. Waiting for trigger.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right: Smartphone View running React Native UI -->
+    <div class="phone-container">
+      <div class="phone-mockup">
+        <div class="phone-notch"></div>
+
+        <div class="app-header">
+          <div>
+            <div class="app-title">LeadStream</div>
+            <div class="app-sub">Meta Lead Ads Live Sync</div>
+          </div>
+          <div class="status-pill">
+            <div class="pulse-dot"></div>
+            <span>LIVE</span>
+          </div>
+        </div>
+
+        <div class="app-subbar">
+          <div>Active Leads: <span id="leadCount">0</span></div>
+          <div style="color: #64748b; font-weight: 500;">Zero-Touch Sync</div>
+        </div>
+
+        <div class="app-feed" id="leadFeed">
+          <div class="empty-placeholder" id="emptyPlaceholder">
+            <div class="empty-icon">●</div>
+            <div class="empty-h">Listening for Submissions</div>
+            <div class="empty-p">Submit a lead using Meta's Lead Ads Testing Tool on the left. Incoming leads will appear here in real time without touching this device.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const socket = io();
+    const connStatus = document.getElementById('connStatus');
+    const leadFeed = document.getElementById('leadFeed');
+    const emptyPlaceholder = document.getElementById('emptyPlaceholder');
+    const leadCount = document.getElementById('leadCount');
+    const terminalLogs = document.getElementById('terminalLogs');
+    const submitBtn = document.getElementById('submitLeadBtn');
+
+    let leads = [];
+
+    function addLog(msg, type = 'info') {
+      const time = new Date().toLocaleTimeString();
+      const div = document.createElement('div');
+      div.className = 'log-line';
+      div.innerHTML = `<span class="log-time">[${time}]</span> <span class="log-${type}">${msg}</span>`;
+      terminalLogs.appendChild(div);
+      terminalLogs.scrollTop = terminalLogs.scrollHeight;
+    }
+
+    socket.on('connect', () => {
+      connStatus.textContent = 'WebSocket: Connected (LIVE)';
+      connStatus.style.color = '#10b981';
+      connStatus.style.borderColor = 'rgba(16, 185, 129, 0.4)';
+      addLog('WebSocket handshake established with backend server.', 'ok');
+      fetchInitialLeads();
+    });
+
+    socket.on('disconnect', () => {
+      connStatus.textContent = 'WebSocket: Disconnected';
+      connStatus.style.color = '#ef4444';
+      addLog('WebSocket disconnected.', 'info');
+    });
+
+    // Zero-Touch Event Arrival!
+    socket.on('new_lead', (lead) => {
+      addLog(`[ws] Received 'new_lead' event: ${lead.fullName} (${lead.email})`, 'ok');
+      prependLead(lead);
+    });
+
+    function prependLead(lead) {
+      if (emptyPlaceholder) {
+        emptyPlaceholder.style.display = 'none';
+      }
+
+      const card = document.createElement('div');
+      card.className = 'lead-card new';
+      card.innerHTML = `
+        <div class="card-head">
+          <div class="card-name">
+            ${escapeHtml(lead.fullName || 'Lead Submission')}
+            <span class="card-new-tag">NEW</span>
+          </div>
+          <div class="card-time">${new Date(lead.received_at || lead.created_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
+        </div>
+        <div class="card-source">${escapeHtml(lead.source || 'Meta Lead Ad')} • Form: ${escapeHtml(lead.form_id || 'Instant Form')}</div>
+        <div class="card-row"><span class="card-lbl">Email:</span><span class="card-val">${escapeHtml(lead.email || 'N/A')}</span></div>
+        <div class="card-row"><span class="card-lbl">Phone:</span><span class="card-val">${escapeHtml(lead.phoneNumber || 'N/A')}</span></div>
+        <div class="card-foot">
+          <span>ID: ${escapeHtml(lead.leadgen_id)}</span>
+          <span>LIVE SYNC</span>
+        </div>
+      `;
+
+      leadFeed.insertBefore(card, leadFeed.firstChild);
+      leads.unshift(lead);
+      leadCount.textContent = leads.length;
+
+      // Remove the highlight after 5 seconds
+      setTimeout(() => {
+        card.classList.remove('new');
+      }, 5000);
+    }
+
+    async function fetchInitialLeads() {
+      try {
+        const res = await fetch('/api/leads');
+        const data = await res.json();
+        if (data.success && Array.isArray(data.leads)) {
+          leads = data.leads;
+          leadCount.textContent = leads.length;
+          if (leads.length > 0) {
+            emptyPlaceholder.style.display = 'none';
+            leads.forEach(l => prependLead(l));
+          }
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    submitBtn.addEventListener('click', async () => {
+      const name = document.getElementById('leadName').value.trim() || 'Alex Rivera';
+      const email = document.getElementById('leadEmail').value.trim() || 'alex.rivera@example.com';
+      const phone = document.getElementById('leadPhone').value.trim() || '+1 (555) 439-0199';
+
+      const leadgenId = `LEADGEN_${Date.now()}`;
+      addLog(`Sending simulated Meta Webhook POST /webhook (leadgen_id: ${leadgenId})...`, 'info');
+
+      // Send webhook POST exactly matching Meta format
+      const payload = {
+        object: 'page',
+        entry: [{
+          id: '1098234857234',
+          time: Math.floor(Date.now() / 1000),
+          changes: [{
+            field: 'leadgen',
+            value: {
+              created_time: Math.floor(Date.now() / 1000),
+              leadgen_id: leadgenId,
+              page_id: '1098234857234',
+              form_id: '876543210987'
+            }
+          }]
+        }]
+      };
+
+      try {
+        const res = await fetch('/webhook', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        const text = await res.text();
+        addLog(`Meta Webhook ACK received: [${res.status}] ${text}`, 'ok');
+
+        // Increment test names for subsequent clicks
+        const randNum = Math.floor(100 + Math.random() * 900);
+        document.getElementById('leadName').value = `Lead Candidate ${randNum}`;
+        document.getElementById('leadEmail').value = `candidate.${randNum}@example.com`;
+      } catch (err) {
+        addLog(`Webhook request error: ${err.message}`, 'info');
+      }
+    });
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str).replace(/[&<>"']/g, m => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m]));
+    }
+  </script>
+</body>
+</html>

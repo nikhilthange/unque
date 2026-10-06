@@ -1,5 +1,6 @@
 require('dotenv').config();
 const http = require('http');
+const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const { Server } = require('socket.io');
@@ -18,6 +19,7 @@ const io = new Server(server, {
 
 app.use(cors());
 app.use(express.json());
+app.use(express.static(path.join(__dirname, '../public')));
 
 app.use((req, res, next) => {
   const ts = new Date().toISOString().substring(11, 19);
