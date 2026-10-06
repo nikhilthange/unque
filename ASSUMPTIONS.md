@@ -1,39 +1,20 @@
-# Project Assumptions
+# Assumptions & Design Notes
 
-This document outlines all technical and operational assumptions made while designing and implementing the **Meta Lead Ads + React Native Real-Time PoC**.
+Here are the key technical and operational assumptions I made while building this solution:
 
----
+### 1. Lead Generation Environment
+- Used Meta's official Lead Ads Testing Tool to simulate lead events. Per the task brief, no live paid campaigns were created.
+- The webhook subscribes to the `leadgen` field under the `Page` webhook object.
+- Meta's sandbox testing tool sometimes produces synthetic IDs (like `444444444444`) that cannot be queried through Graph API without specific page permissions. Because of this, the backend first attempts to fetch data via Graph API using a page access token, but falls back gracefully to structured sandbox lead data if the token is missing or if the test ID fails.
 
-### 1. Meta Sandbox & Lead Ads Testing Tool
-- **No Real Ad Spend Needed:** Per the assignment guidelines, Meta's official [Lead Ads Testing Tool](https://developers.facebook.com/tools/lead-ads-testing) is used to simulate lead submissions. No real ad campaigns or credit cards are required.
-- **Webhook Subscription:** We assume the Meta App has subscribed to the `leadgen` field under the `Page` webhook object, and the Facebook Page used for testing is linked to the app in the Meta App Dashboard.
-- **Dummy Lead IDs in Testing:** In some Meta Developer test setups, the testing tool may generate synthetic test IDs (e.g., `444444444444`). While a live Meta Graph API call (`GET /{leadgen_id}`) requires an active `Page Access Token` with `leads_retrieval` permission, our backend assumes a resilient architecture: it attempts to fetch from Graph API if a token is supplied, and gracefully falls back to structured test data if the sandbox test ID is not queryable.
+### 2. Webhook & Payload Resolution
+- Meta webhooks only deliver metadata (`leadgen_id`, `form_id`, `page_id`, `created_time`) rather than full lead responses (name/email/phone) due to privacy regulations. In production, this requires fetching the lead details via Graph API.
+- Meta enforces a strict timeout on webhook responses, so the backend sends `200 OK` immediately upon receipt and processes data retrieval + WebSocket broadcast asynchronously.
 
----
+### 3. Real-Time Communication
+- Used WebSockets (Socket.IO) instead of polling or push notifications (APNs/FCM). Since the requirement states the app screen is "already open", WebSockets provide immediate delivery (<100ms) with zero polling overhead.
+- Event deduplication is handled on the backend by caching received `leadgen_id`s, ensuring that any Meta webhook retries don't produce duplicate cards on the mobile app.
 
-### 2. Webhook Architecture & Data Privacy (PII)
-- **Two-Step Lead Ingestion:** Meta does not send user PII (Full Name, Email, Phone Number) directly in the webhook POST body for security and GDPR compliance. Instead, the webhook delivers a lightweight notification containing `{ "leadgen_id", "form_id", "page_id", "created_time" }`. The backend is assumed to handle the secondary step of fetching the lead's form responses via Graph API.
-- **Immediate Webhook Acknowledgment:** Meta enforces a 20-second timeout on webhook responses. Our server assumes an asynchronous processing model: it responds with `HTTP 200 OK` immediately upon payload validation, and handles lead fetching and WebSocket broadcasting asynchronously.
-
----
-
-### 3. Real-Time Transport Protocol
-- **WebSockets over Polling:** To satisfy the strict requirement that the lead appears *"without any manual action on the device"*, we chose **WebSockets (Socket.IO)** over HTTP polling or manual pull-to-refresh. This provides sub-second latency, bidirectional heartbeat checks, and automatic reconnection if the network fluctuates.
-- **Push Notification Alternative:** While Firebase Cloud Messaging (FCM) / Apple Push Notifications (APNs) are standard for background notifications, the assignment specifically targets an *"already-open React Native app screen"*. WebSockets are ideal for foreground real-time state synchronization without external push service overhead.
-
----
-
-### 4. Network & Device Connectivity
-- **Public Ingress for Meta:** Meta's servers require a publicly accessible HTTPS URL for webhook verification and delivery. We assume an HTTPS tunneling tool such as `ngrok`, `localtunnel`, or `Cloudflare Tunnel` is used to expose the local backend during development and demonstration.
-- **Device-to-Backend Resolution:** Depending on whether the app is tested on:
-  - **Physical Device:** Connects via LAN IP (e.g., `http://192.168.1.X:5000`) or the tunnel URL.
-  - **Android Emulator:** Connects via `http://10.0.2.2:5000`.
-  - **iOS Simulator:** Connects via `http://localhost:5000`.
-  To ensure seamless testing in any environment, an in-app server URL switcher is built into the mobile app header.
-
----
-
-### 5. State Management & Deduplication
-- **Deduplication:** Meta webhooks may retry if network conditions jitter. The backend implements deduplication using `leadgen_id` to ensure duplicate entries are never broadcast to the device.
-- **Initial Load & History:** When the mobile app mounts, it fetches previous leads via `GET /api/leads` and then stays subscribed to the `new_lead` WebSocket event for incoming live additions.
-- **Zero-Touch Animation:** New leads are prepended to the top of the list with a high-visibility badge ("NEW") and visual highlighting so viewers immediately notice the update without touching the screen.
+### 4. Network Setup
+- A public HTTPS tunnel (like localtunnel or ngrok) is assumed to expose the local webhook port (`5000`) to Meta's servers.
+- The mobile app connects to the backend over the local network / loopback (`10.0.2.2` for Android emulator, `localhost` for iOS simulator, or local Wi-Fi IP for physical device). An in-app configuration modal allows switching the backend URL on the fly.

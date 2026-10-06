@@ -1,10 +1,5 @@
 const axios = require('axios');
 
-/**
- * Parses Meta's Graph API `field_data` array into an easy key-value dictionary
- * e.g. [{ name: 'full_name', values: ['Alice'] }, { name: 'email', values: ['alice@example.com'] }]
- * => { fullName: 'Alice', email: 'alice@example.com', fields: { ... } }
- */
 function parseFieldData(fieldData = []) {
   const result = {
     fullName: null,
@@ -13,87 +8,71 @@ function parseFieldData(fieldData = []) {
     customFields: {},
   };
 
-  fieldData.forEach((item) => {
+  for (const item of fieldData) {
     const key = (item.name || '').toLowerCase();
-    const value = item.values && item.values.length > 0 ? item.values[0] : '';
+    const val = item.values && item.values.length > 0 ? item.values[0] : '';
 
     if (key === 'full_name' || key === 'name') {
-      result.fullName = value;
+      result.fullName = val;
     } else if (key === 'email') {
-      result.email = value;
+      result.email = val;
     } else if (key === 'phone_number' || key === 'phone') {
-      result.phoneNumber = value;
-    } else {
-      result.customFields[item.name] = value;
+      result.phoneNumber = val;
+    } else if (item.name) {
+      result.customFields[item.name] = val;
     }
-  });
+  }
 
   return result;
 }
 
-/**
- * Fetches the full lead details from Meta Graph API using leadgen_id
- * Falls back gracefully to realistic sandbox data if token is missing or Graph API errors
- */
 async function fetchLeadDetails({ leadgenId, formId, pageId, createdTime }) {
-  const accessToken = process.env.META_PAGE_ACCESS_TOKEN;
-  const apiVersion = process.env.META_GRAPH_API_VERSION || 'v21.0';
+  const token = process.env.META_PAGE_ACCESS_TOKEN;
+  const version = process.env.META_GRAPH_API_VERSION || 'v21.0';
 
-  if (accessToken && accessToken.trim().length > 0) {
+  if (token && token.trim()) {
     try {
-      const url = `https://graph.facebook.com/${apiVersion}/${leadgenId}?fields=created_time,id,ad_id,form_id,field_data&access_token=${accessToken}`;
-      console.log(`[Meta Service] Fetching lead ${leadgenId} from Meta Graph API...`);
-      
-      const response = await axios.get(url, { timeout: 10000 });
-      const data = response.data;
-      const parsed = parseFieldData(data.field_data || []);
+      const url = `https://graph.facebook.com/${version}/${leadgenId}?fields=created_time,id,ad_id,form_id,field_data&access_token=${token}`;
+      const res = await axios.get(url, { timeout: 8000 });
+      const parsed = parseFieldData(res.data.field_data || []);
 
       return {
-        leadgen_id: String(data.id || leadgenId),
-        form_id: data.form_id || formId || 'TEST_FORM',
-        page_id: pageId || 'TEST_PAGE',
-        ad_id: data.ad_id || null,
-        created_time: data.created_time || new Date().toISOString(),
+        leadgen_id: String(res.data.id || leadgenId),
+        form_id: res.data.form_id || formId,
+        page_id: pageId,
+        created_time: res.data.created_time || new Date().toISOString(),
         received_at: new Date().toISOString(),
-        fullName: parsed.fullName || 'Meta Lead User',
+        fullName: parsed.fullName || 'Lead Candidate',
         email: parsed.email || 'lead@example.com',
-        phoneNumber: parsed.phoneNumber || '+1 555-0100',
+        phoneNumber: parsed.phoneNumber || '+1 555-0123',
         customFields: parsed.customFields,
-        source: 'Meta Graph API (Verified Live)',
+        source: 'Meta Graph API',
         isSimulated: false,
       };
     } catch (err) {
-      console.warn(`[Meta Service] Graph API call failed (${err.response?.status || err.message}). Using fallback parsing.`);
-      if (err.response?.data?.error) {
-        console.warn(`[Meta Service] Meta Error: ${err.response.data.error.message}`);
-      }
+      console.warn(`[meta-api] Could not fetch lead ${leadgenId} from Graph API:`, err.response?.data?.error?.message || err.message);
     }
-  } else {
-    console.log(`[Meta Service] No META_PAGE_ACCESS_TOKEN configured. Using sandbox/mock data generation for leadgen_id=${leadgenId}`);
   }
 
-  // Fallback / Sandbox Test Lead representation
-  // Meta Lead Ads Testing Tool generates dummy IDs like "444444444444"
-  const randomSuffix = Math.floor(100 + Math.random() * 900);
+  // Fallback for Lead Ads Testing Tool sandbox dummy IDs or when token is not yet linked
+  const rand = Math.floor(100 + Math.random() * 900);
   const now = new Date();
-  
+
   return {
-    leadgen_id: String(leadgenId || `TEST_LEAD_${Date.now()}`),
-    form_id: formId || 'TEST_FORM_101',
-    page_id: pageId || 'TEST_PAGE_202',
-    ad_id: null,
+    leadgen_id: String(leadgenId || `TEST_${Date.now()}`),
+    form_id: formId || 'FORM_TEST_01',
+    page_id: pageId || 'PAGE_TEST_01',
     created_time: createdTime ? new Date(createdTime * 1000).toISOString() : now.toISOString(),
     received_at: now.toISOString(),
-    fullName: `Test Lead #${randomSuffix}`,
-    email: `lead.${randomSuffix}@testdomain.com`,
-    phoneNumber: `+1 (555) 012-${randomSuffix}`,
+    fullName: `Alex Rivera ${rand}`,
+    email: `alex.rivera${rand}@example.com`,
+    phoneNumber: `+1 (555) 439-${rand}`,
     customFields: {
-      company: 'Acme Corporation',
-      interest: 'Product Demo',
-      city: 'San Francisco',
+      company: 'TechCorp',
+      interest: 'Full Stack Integration',
     },
-    source: 'Meta Lead Testing Tool (Sandbox)',
-    isSimulated: !accessToken,
+    source: 'Meta Lead Ads (Testing Tool)',
+    isSimulated: !token,
   };
 }
 

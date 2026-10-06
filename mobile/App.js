@@ -12,57 +12,50 @@ import {
   Animated,
   Platform,
   RefreshControl,
-  Vibration,
 } from 'react-native';
 import io from 'socket.io-client';
 
-// Default backend resolution based on platform
-const getDefaultServerUrl = () => {
+const getInitialServerUrl = () => {
   if (Platform.OS === 'android') {
-    // 10.0.2.2 is the special alias for host loopback in Android emulator
     return 'http://10.0.2.2:5000';
   }
   return 'http://localhost:5000';
 };
 
 export default function App() {
-  const [serverUrl, setServerUrl] = useState(getDefaultServerUrl());
+  const [serverUrl, setServerUrl] = useState(getInitialServerUrl());
   const [tempUrl, setTempUrl] = useState(serverUrl);
-  const [showConfig, setShowConfig] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
 
   const [leads, setLeads] = useState([]);
-  const [connectionStatus, setConnectionStatus] = useState('connecting'); // 'connected' | 'connecting' | 'disconnected'
+  const [status, setStatus] = useState('connecting'); // connected | connecting | disconnected
   const [refreshing, setRefreshing] = useState(false);
-  const [latestLeadId, setLatestLeadId] = useState(null);
+  const [activeLeadId, setActiveLeadId] = useState(null);
 
-  // Pulse animation for the Live indicator
-  const pulseAnim = useRef(new Animated.Value(1)).current;
+  const blinkAnim = useRef(new Animated.Value(1)).current;
   const socketRef = useRef(null);
 
   useEffect(() => {
-    // Continuous subtle pulsing animation for the LIVE indicator
-    const pulseLoop = Animated.loop(
+    const blink = Animated.loop(
       Animated.sequence([
-        Animated.timing(pulseAnim, {
-          toValue: 0.35,
-          duration: 900,
+        Animated.timing(blinkAnim, {
+          toValue: 0.3,
+          duration: 800,
           useNativeDriver: true,
         }),
-        Animated.timing(pulseAnim, {
+        Animated.timing(blinkAnim, {
           toValue: 1,
-          duration: 900,
+          duration: 800,
           useNativeDriver: true,
         }),
       ])
     );
-    pulseLoop.start();
-    return () => pulseLoop.stop();
-  }, [pulseAnim]);
+    blink.start();
+    return () => blink.stop();
+  }, [blinkAnim]);
 
-  // Connect to Socket.IO backend
   useEffect(() => {
-    console.log(`[Socket] Initializing connection to: ${serverUrl}`);
-    setConnectionStatus('connecting');
+    setStatus('connecting');
 
     if (socketRef.current) {
       socketRef.current.disconnect();
@@ -70,45 +63,33 @@ export default function App() {
 
     const socket = io(serverUrl, {
       transports: ['websocket', 'polling'],
-      reconnectionAttempts: 20,
-      reconnectionDelay: 1500,
+      reconnectionAttempts: 15,
+      reconnectionDelay: 1000,
       timeout: 10000,
     });
 
     socketRef.current = socket;
 
     socket.on('connect', () => {
-      console.log('✅ [Socket] Connected successfully!');
-      setConnectionStatus('connected');
-      fetchHistoricalLeads(serverUrl);
+      setStatus('connected');
+      loadLeads(serverUrl);
     });
 
-    socket.on('disconnect', (reason) => {
-      console.log('⚠️ [Socket] Disconnected:', reason);
-      setConnectionStatus('disconnected');
+    socket.on('disconnect', () => {
+      setStatus('disconnected');
     });
 
-    socket.on('connect_error', (err) => {
-      console.warn('❌ [Socket] Connection error:', err.message);
-      setConnectionStatus('disconnected');
+    socket.on('connect_error', () => {
+      setStatus('disconnected');
     });
 
-    // Zero-Touch Event: New Lead Received Live!
+    // Handle real-time lead arrival without any user interaction
     socket.on('new_lead', (newLead) => {
-      console.log('⚡ [Socket] NEW LEAD RECEIVED LIVE:', newLead);
-
-      try {
-        Vibration.vibrate([0, 80, 50, 80]);
-      } catch (e) {
-        // Haptics fallback on simulator
-      }
-
-      setLatestLeadId(newLead.leadgen_id);
+      setActiveLeadId(newLead.leadgen_id);
 
       setLeads((prev) => {
-        // Prevent duplicate leads if re-broadcasted
-        const exists = prev.some((l) => l.leadgen_id === newLead.leadgen_id);
-        if (exists) {
+        const found = prev.some((l) => l.leadgen_id === newLead.leadgen_id);
+        if (found) {
           return prev.map((l) => (l.leadgen_id === newLead.leadgen_id ? newLead : l));
         }
         return [newLead, ...prev];
@@ -124,242 +105,204 @@ export default function App() {
     };
   }, [serverUrl]);
 
-  const fetchHistoricalLeads = async (url) => {
+  const loadLeads = async (url) => {
     try {
-      const response = await fetch(`${url}/api/leads`);
-      const data = await response.json();
+      const res = await fetch(`${url}/api/leads`);
+      const data = await res.json();
       if (data && data.success && Array.isArray(data.leads)) {
         setLeads(data.leads);
       }
     } catch (err) {
-      console.log('[API] Error fetching historical leads:', err.message);
+      console.log('Error loading leads:', err.message);
     }
   };
 
-  const handleRefresh = async () => {
+  const onRefresh = async () => {
     setRefreshing(true);
-    await fetchHistoricalLeads(serverUrl);
+    await loadLeads(serverUrl);
     setRefreshing(false);
   };
 
-  const handleSaveConfig = () => {
-    let formatted = tempUrl.trim();
-    if (!formatted.startsWith('http://') && !formatted.startsWith('https://')) {
-      formatted = `http://${formatted}`;
+  const saveUrl = () => {
+    let clean = tempUrl.trim();
+    if (!clean.startsWith('http://') && !clean.startsWith('https://')) {
+      clean = `http://${clean}`;
     }
-    setServerUrl(formatted);
-    setShowConfig(false);
+    setServerUrl(clean);
+    setModalOpen(false);
   };
 
-  const formatTimestamp = (isoString) => {
-    if (!isoString) return 'Just now';
+  const formatTime = (iso) => {
+    if (!iso) return 'Just now';
     try {
-      const date = new Date(isoString);
-      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    } catch (e) {
-      return isoString;
+      const d = new Date(iso);
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    } catch {
+      return iso;
     }
   };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <StatusBar barStyle="light-content" backgroundColor="#0B0F19" />
+    <SafeAreaView style={styles.container}>
+      <StatusBar barStyle="light-content" backgroundColor="#0f172a" />
 
-      {/* Top Header */}
+      {/* Header */}
       <View style={styles.header}>
-        <View style={styles.headerLeft}>
-          <Text style={styles.appTitle}>LeadPulse</Text>
-          <Text style={styles.appSubtitle}>Meta Lead Ads Live Stream</Text>
+        <View>
+          <Text style={styles.title}>Leads Dashboard</Text>
+          <Text style={styles.subtitle}>Meta Lead Ads Live Sync</Text>
         </View>
 
         <View style={styles.headerRight}>
-          {/* Connection Status Pill */}
           <View
             style={[
-              styles.statusPill,
-              connectionStatus === 'connected'
-                ? styles.statusConnected
-                : connectionStatus === 'connecting'
-                ? styles.statusConnecting
-                : styles.statusDisconnected,
+              styles.badge,
+              status === 'connected'
+                ? styles.badgeOnline
+                : status === 'connecting'
+                ? styles.badgeWarning
+                : styles.badgeOffline,
             ]}
           >
             <Animated.View
               style={[
-                styles.statusDot,
-                connectionStatus === 'connected'
-                  ? styles.dotConnected
-                  : connectionStatus === 'connecting'
-                  ? styles.dotConnecting
-                  : styles.dotDisconnected,
-                connectionStatus === 'connected' ? { opacity: pulseAnim } : null,
+                styles.dot,
+                status === 'connected'
+                  ? styles.dotOnline
+                  : status === 'connecting'
+                  ? styles.dotWarning
+                  : styles.dotOffline,
+                status === 'connected' ? { opacity: blinkAnim } : null,
               ]}
             />
-            <Text style={styles.statusText}>
-              {connectionStatus === 'connected'
-                ? 'LIVE'
-                : connectionStatus === 'connecting'
-                ? 'CONNECTING'
-                : 'OFFLINE'}
+            <Text style={styles.badgeText}>
+              {status === 'connected' ? 'LIVE' : status === 'connecting' ? 'SYNCING' : 'OFFLINE'}
             </Text>
           </View>
 
-          {/* Config / Settings Button */}
           <TouchableOpacity
-            style={styles.settingsButton}
+            style={styles.configBtn}
             onPress={() => {
               setTempUrl(serverUrl);
-              setShowConfig(true);
+              setModalOpen(true);
             }}
           >
-            <Text style={styles.settingsIcon}>⚙️</Text>
+            <Text style={styles.configBtnText}>Config</Text>
           </TouchableOpacity>
         </View>
       </View>
 
-      {/* Leads Counter Bar */}
-      <View style={styles.counterBar}>
-        <Text style={styles.counterLabel}>
-          RECEIVED LEADS: <Text style={styles.counterValue}>{leads.length}</Text>
-        </Text>
-        <Text style={styles.counterHint}>Zero-Touch Instant Sync</Text>
+      {/* Subheader info */}
+      <View style={styles.subBar}>
+        <Text style={styles.countText}>Total: {leads.length} leads</Text>
+        <Text style={styles.hintText}>Real-time push enabled</Text>
       </View>
 
-      {/* Lead Feed List */}
+      {/* Leads List */}
       <FlatList
         data={leads}
         keyExtractor={(item) => String(item.leadgen_id || Math.random())}
-        contentContainerStyle={leads.length === 0 ? styles.emptyContainer : styles.listContent}
+        contentContainerStyle={leads.length === 0 ? styles.emptyWrap : styles.listWrap}
         refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={handleRefresh}
-            tintColor="#38BDF8"
-            colors={['#38BDF8']}
-          />
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#38bdf8" />
         }
         renderItem={({ item }) => {
-          const isLatest = item.leadgen_id === latestLeadId;
+          const isLatest = item.leadgen_id === activeLeadId;
 
           return (
-            <View style={[styles.card, isLatest && styles.cardLatest]}>
-              {/* Card Header */}
-              <View style={styles.cardHeader}>
-                <View style={styles.nameRow}>
-                  <Text style={styles.cardName}>{item.fullName || 'Anonymous Lead'}</Text>
+            <View style={[styles.card, isLatest && styles.cardActive]}>
+              <View style={styles.cardTop}>
+                <View style={styles.nameWrap}>
+                  <Text style={styles.leadName}>{item.fullName || 'New Lead'}</Text>
                   {isLatest && (
-                    <View style={styles.newBadge}>
-                      <Text style={styles.newBadgeText}>⚡ NEW</Text>
+                    <View style={styles.newTag}>
+                      <Text style={styles.newTagText}>NEW</Text>
                     </View>
                   )}
                 </View>
-                <Text style={styles.cardTime}>{formatTimestamp(item.received_at || item.created_time)}</Text>
+                <Text style={styles.timeText}>{formatTime(item.received_at || item.created_time)}</Text>
               </View>
 
-              {/* Source Tag */}
-              <View style={styles.sourceTag}>
-                <Text style={styles.sourceIcon}>📢</Text>
-                <Text style={styles.sourceText}>
-                  {item.source || 'Meta Lead Ad'} • Form: {item.form_id || 'Instant Form'}
-                </Text>
+              <Text style={styles.sourceText}>Source: {item.source || 'Meta Lead Ad'}</Text>
+
+              <View style={styles.infoRow}>
+                <Text style={styles.infoLabel}>Email:</Text>
+                <Text style={styles.infoValue}>{item.email || 'N/A'}</Text>
               </View>
 
-              {/* Contact Information */}
-              <View style={styles.contactDetails}>
-                <View style={styles.detailRow}>
-                  <Text style={styles.detailIcon}>✉️</Text>
-                  <Text style={styles.detailText}>{item.email || 'No email provided'}</Text>
-                </View>
-                <View style={styles.detailRow}>
-                  <Text style={styles.detailIcon}>📞</Text>
-                  <Text style={styles.detailText}>{item.phoneNumber || 'No phone provided'}</Text>
-                </View>
+              <View style={styles.infoRow}>
+                <Text style={styles.infoLabel}>Phone:</Text>
+                <Text style={styles.infoValue}>{item.phoneNumber || 'N/A'}</Text>
               </View>
 
-              {/* Custom fields if any */}
               {item.customFields && Object.keys(item.customFields).length > 0 && (
-                <View style={styles.customFieldsBox}>
-                  {Object.entries(item.customFields).map(([key, value]) => (
-                    <View key={key} style={styles.customFieldPill}>
-                      <Text style={styles.customFieldKey}>{key}: </Text>
-                      <Text style={styles.customFieldValue}>{String(value)}</Text>
-                    </View>
+                <View style={styles.customBox}>
+                  {Object.entries(item.customFields).map(([k, v]) => (
+                    <Text key={k} style={styles.customItem}>
+                      <Text style={styles.customKey}>{k}: </Text>
+                      {String(v)}
+                    </Text>
                   ))}
                 </View>
               )}
 
-              {/* Footer with Lead ID */}
-              <View style={styles.cardFooter}>
-                <Text style={styles.idLabel}>ID: {item.leadgen_id}</Text>
-                {item.isSimulated && (
-                  <Text style={styles.sandboxBadge}>Sandbox Verified</Text>
-                )}
+              <View style={styles.cardBottom}>
+                <Text style={styles.leadId}>ID: {item.leadgen_id}</Text>
+                {item.form_id ? <Text style={styles.formId}>Form: {item.form_id}</Text> : null}
               </View>
             </View>
           );
         }}
         ListEmptyComponent={
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyIcon}>📡</Text>
-            <Text style={styles.emptyTitle}>Listening for Meta Leads...</Text>
-            <Text style={styles.emptySubtitle}>
-              Open Meta's Lead Ads Testing Tool and click "Create Lead".
-              Submissions will arrive here instantly without touching this screen!
+          <View style={styles.emptyBox}>
+            <Text style={styles.emptyTitle}>Waiting for submissions</Text>
+            <Text style={styles.emptyDesc}>
+              Submit a test lead via Meta's Lead Ads Testing Tool.
+              The entry will pop up here instantly without touching your phone.
             </Text>
-            <View style={styles.serverInfoPill}>
-              <Text style={styles.serverInfoText}>Target: {serverUrl}</Text>
-            </View>
+            <Text style={styles.serverLabel}>Backend: {serverUrl}</Text>
           </View>
         }
       />
 
-      {/* Server Configuration Modal */}
-      <Modal visible={showConfig} transparent animationType="fade">
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Backend Server Config</Text>
-            <Text style={styles.modalSubtitle}>
-              Specify the IP or tunnel URL pointing to your Node.js backend:
-            </Text>
+      {/* URL Settings Modal */}
+      <Modal visible={modalOpen} transparent animationType="fade">
+        <View style={styles.modalBg}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalHeading}>Backend Server URL</Text>
+            <Text style={styles.modalDesc}>Configure backend address for simulator or local device:</Text>
 
             <TextInput
-              style={styles.input}
+              style={styles.modalInput}
               value={tempUrl}
               onChangeText={setTempUrl}
-              placeholder="e.g. http://192.168.1.5:5000"
-              placeholderTextColor="#64748B"
               autoCapitalize="none"
               autoCorrect={false}
+              placeholder="http://192.168.1.5:5000"
+              placeholderTextColor="#64748b"
             />
 
-            {/* Quick Presets */}
-            <View style={styles.presetRow}>
+            <View style={styles.presetButtons}>
               <TouchableOpacity
-                style={styles.presetButton}
+                style={styles.presetBtn}
                 onPress={() => setTempUrl('http://localhost:5000')}
               >
-                <Text style={styles.presetText}>Localhost</Text>
+                <Text style={styles.presetBtnText}>localhost:5000</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={styles.presetButton}
+                style={styles.presetBtn}
                 onPress={() => setTempUrl('http://10.0.2.2:5000')}
               >
-                <Text style={styles.presetText}>Android (10.0.2.2)</Text>
+                <Text style={styles.presetBtnText}>10.0.2.2:5000 (Android)</Text>
               </TouchableOpacity>
             </View>
 
-            <View style={styles.modalActions}>
-              <TouchableOpacity
-                style={styles.cancelButton}
-                onPress={() => setShowConfig(false)}
-              >
-                <Text style={styles.cancelButtonText}>Cancel</Text>
+            <View style={styles.modalFooter}>
+              <TouchableOpacity style={styles.cancelBtn} onPress={() => setModalOpen(false)}>
+                <Text style={styles.cancelBtnText}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.saveButton}
-                onPress={handleSaveConfig}
-              >
-                <Text style={styles.saveButtonText}>Connect</Text>
+              <TouchableOpacity style={styles.saveBtn} onPress={saveUrl}>
+                <Text style={styles.saveBtnText}>Connect</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -370,369 +313,296 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
+  container: {
     flex: 1,
-    backgroundColor: '#0B0F19',
+    backgroundColor: '#0f172a',
   },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 18,
+    paddingHorizontal: 16,
     paddingVertical: 14,
     borderBottomWidth: 1,
-    borderBottomColor: '#1E293B',
-    backgroundColor: '#0F172A',
+    borderBottomColor: '#1e293b',
+    backgroundColor: '#0f172a',
   },
-  headerLeft: {
-    flex: 1,
+  title: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#f8fafc',
   },
-  appTitle: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: '#F8FAFC',
-    letterSpacing: -0.5,
-  },
-  appSubtitle: {
+  subtitle: {
     fontSize: 12,
-    color: '#94A3B8',
+    color: '#94a3b8',
     marginTop: 2,
   },
   headerRight: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 8,
   },
-  statusPill: {
+  badge: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 20,
-    marginRight: 8,
-  },
-  statusConnected: {
-    backgroundColor: 'rgba(16, 185, 129, 0.15)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
     borderWidth: 1,
-    borderColor: '#10B981',
   },
-  statusConnecting: {
-    backgroundColor: 'rgba(245, 158, 11, 0.15)',
-    borderWidth: 1,
-    borderColor: '#F59E0B',
+  badgeOnline: {
+    borderColor: '#10b981',
+    backgroundColor: 'rgba(16, 185, 129, 0.1)',
   },
-  statusDisconnected: {
-    backgroundColor: 'rgba(239, 68, 68, 0.15)',
-    borderWidth: 1,
-    borderColor: '#EF4444',
+  badgeWarning: {
+    borderColor: '#f59e0b',
+    backgroundColor: 'rgba(245, 158, 11, 0.1)',
   },
-  statusDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
+  badgeOffline: {
+    borderColor: '#ef4444',
+    backgroundColor: 'rgba(239, 68, 68, 0.1)',
+  },
+  dot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
     marginRight: 6,
   },
-  dotConnected: {
-    backgroundColor: '#10B981',
-  },
-  dotConnecting: {
-    backgroundColor: '#F59E0B',
-  },
-  dotDisconnected: {
-    backgroundColor: '#EF4444',
-  },
-  statusText: {
+  dotOnline: { backgroundColor: '#10b981' },
+  dotWarning: { backgroundColor: '#f59e0b' },
+  dotOffline: { backgroundColor: '#ef4444' },
+  badgeText: {
     fontSize: 11,
-    fontWeight: '700',
-    color: '#F8FAFC',
+    fontWeight: '600',
+    color: '#f8fafc',
   },
-  settingsButton: {
-    padding: 6,
-    borderRadius: 8,
-    backgroundColor: '#1E293B',
+  configBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    backgroundColor: '#1e293b',
+    borderRadius: 6,
   },
-  settingsIcon: {
-    fontSize: 16,
+  configBtnText: {
+    fontSize: 12,
+    color: '#cbd5e1',
   },
-  counterBar: {
+  subBar: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 18,
+    paddingHorizontal: 16,
     paddingVertical: 10,
-    backgroundColor: '#111827',
+    backgroundColor: '#1e293b',
     borderBottomWidth: 1,
-    borderBottomColor: '#1E293B',
+    borderBottomColor: '#334155',
   },
-  counterLabel: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#64748B',
-    letterSpacing: 0.8,
-  },
-  counterValue: {
-    color: '#38BDF8',
-    fontWeight: '900',
-  },
-  counterHint: {
-    fontSize: 11,
-    color: '#10B981',
+  countText: {
+    fontSize: 12,
     fontWeight: '600',
+    color: '#94a3b8',
   },
-  listContent: {
+  hintText: {
+    fontSize: 12,
+    color: '#38bdf8',
+  },
+  listWrap: {
     padding: 16,
-    paddingBottom: 40,
+    paddingBottom: 32,
   },
-  emptyContainer: {
+  emptyWrap: {
     flexGrow: 1,
     justifyContent: 'center',
     alignItems: 'center',
     padding: 24,
   },
   card: {
-    backgroundColor: '#1E293B',
-    borderRadius: 14,
-    padding: 16,
-    marginBottom: 14,
-    borderWidth: 1,
-    borderColor: '#334155',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.25,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  cardLatest: {
-    borderColor: '#38BDF8',
-    borderWidth: 2,
-    backgroundColor: '#1E293B',
-    shadowColor: '#38BDF8',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.6,
-    shadowRadius: 10,
-  },
-  cardHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  nameRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-  },
-  cardName: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: '#F8FAFC',
-    marginRight: 8,
-  },
-  newBadge: {
-    backgroundColor: '#0284C7',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 6,
-  },
-  newBadgeText: {
-    color: '#FFFFFF',
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 0.5,
-  },
-  cardTime: {
-    fontSize: 12,
-    color: '#94A3B8',
-  },
-  sourceTag: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#0F172A',
-    alignSelf: 'flex-start',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
+    backgroundColor: '#1e293b',
+    borderRadius: 10,
+    padding: 14,
     marginBottom: 12,
-  },
-  sourceIcon: {
-    fontSize: 11,
-    marginRight: 5,
-  },
-  sourceText: {
-    fontSize: 11,
-    color: '#94A3B8',
-    fontWeight: '500',
-  },
-  contactDetails: {
-    marginBottom: 12,
-  },
-  detailRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 5,
-  },
-  detailIcon: {
-    fontSize: 13,
-    marginRight: 8,
-    width: 18,
-  },
-  detailText: {
-    fontSize: 14,
-    color: '#E2E8F0',
-  },
-  customFieldsBox: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-    marginBottom: 12,
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: '#334155',
-  },
-  customFieldPill: {
-    flexDirection: 'row',
-    backgroundColor: '#0F172A',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 6,
-  },
-  customFieldKey: {
-    fontSize: 11,
-    color: '#64748B',
-    fontWeight: '600',
-  },
-  customFieldValue: {
-    fontSize: 11,
-    color: '#CBD5E1',
-    fontWeight: '600',
-  },
-  cardFooter: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: '#334155',
-  },
-  idLabel: {
-    fontSize: 11,
-    color: '#64748B',
-    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
-  },
-  sandboxBadge: {
-    fontSize: 10,
-    color: '#A78BFA',
-    fontWeight: '600',
-  },
-  emptyState: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 20,
-  },
-  emptyIcon: {
-    fontSize: 48,
-    marginBottom: 16,
-  },
-  emptyTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#F8FAFC',
-    marginBottom: 8,
-    textAlign: 'center',
-  },
-  emptySubtitle: {
-    fontSize: 13,
-    color: '#94A3B8',
-    textAlign: 'center',
-    lineHeight: 19,
-    marginBottom: 20,
-  },
-  serverInfoPill: {
-    backgroundColor: '#1E293B',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 20,
-  },
-  serverInfoText: {
-    fontSize: 11,
-    color: '#64748B',
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.75)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-  },
-  modalCard: {
-    width: '100%',
-    maxWidth: 380,
-    backgroundColor: '#1E293B',
-    borderRadius: 16,
-    padding: 20,
     borderWidth: 1,
     borderColor: '#334155',
   },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: '#F8FAFC',
+  cardActive: {
+    borderColor: '#38bdf8',
+    backgroundColor: '#1e293b',
+  },
+  cardTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     marginBottom: 6,
   },
-  modalSubtitle: {
-    fontSize: 13,
-    color: '#94A3B8',
-    marginBottom: 16,
-    lineHeight: 18,
+  nameWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
-  input: {
-    backgroundColor: '#0F172A',
+  leadName: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#f8fafc',
+  },
+  newTag: {
+    backgroundColor: '#0284c7',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  newTagText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#ffffff',
+  },
+  timeText: {
+    fontSize: 12,
+    color: '#64748b',
+  },
+  sourceText: {
+    fontSize: 12,
+    color: '#64748b',
+    marginBottom: 8,
+  },
+  infoRow: {
+    flexDirection: 'row',
+    gap: 6,
+    marginBottom: 4,
+  },
+  infoLabel: {
+    fontSize: 13,
+    color: '#64748b',
+    width: 48,
+  },
+  infoValue: {
+    fontSize: 13,
+    color: '#e2e8f0',
+  },
+  customBox: {
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#334155',
+  },
+  customItem: {
+    fontSize: 12,
+    color: '#cbd5e1',
+    marginBottom: 2,
+  },
+  customKey: {
+    color: '#64748b',
+  },
+  cardBottom: {
+    marginTop: 10,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#334155',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  leadId: {
+    fontSize: 11,
+    color: '#64748b',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
+  formId: {
+    fontSize: 11,
+    color: '#64748b',
+  },
+  emptyBox: {
+    alignItems: 'center',
+    maxWidth: 320,
+  },
+  emptyTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#f8fafc',
+    marginBottom: 8,
+  },
+  emptyDesc: {
+    fontSize: 13,
+    color: '#94a3b8',
+    textAlign: 'center',
+    lineHeight: 18,
+    marginBottom: 16,
+  },
+  serverLabel: {
+    fontSize: 11,
+    color: '#64748b',
+  },
+  modalBg: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalContent: {
+    width: '100%',
+    maxWidth: 360,
+    backgroundColor: '#1e293b',
+    borderRadius: 12,
+    padding: 18,
     borderWidth: 1,
     borderColor: '#334155',
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 14,
-    color: '#F8FAFC',
-    marginBottom: 14,
   },
-  presetRow: {
+  modalHeading: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#f8fafc',
+    marginBottom: 4,
+  },
+  modalDesc: {
+    fontSize: 12,
+    color: '#94a3b8',
+    marginBottom: 12,
+  },
+  modalInput: {
+    backgroundColor: '#0f172a',
+    borderWidth: 1,
+    borderColor: '#334155',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    color: '#f8fafc',
+    fontSize: 14,
+    marginBottom: 12,
+  },
+  presetButtons: {
     flexDirection: 'row',
     gap: 8,
-    marginBottom: 20,
+    marginBottom: 16,
   },
-  presetButton: {
+  presetBtn: {
     backgroundColor: '#334155',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
   },
-  presetText: {
+  presetBtnText: {
     fontSize: 11,
-    color: '#E2E8F0',
-    fontWeight: '600',
+    color: '#cbd5e1',
   },
-  modalActions: {
+  modalFooter: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
-    gap: 10,
+    gap: 8,
   },
-  cancelButton: {
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 8,
+  cancelBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
   },
-  cancelButtonText: {
-    color: '#94A3B8',
+  cancelBtnText: {
+    color: '#94a3b8',
+    fontSize: 13,
+  },
+  saveBtn: {
+    backgroundColor: '#0284c7',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 6,
+  },
+  saveBtnText: {
+    color: '#ffffff',
+    fontSize: 13,
     fontWeight: '600',
-  },
-  saveButton: {
-    backgroundColor: '#0284C7',
-    paddingHorizontal: 18,
-    paddingVertical: 10,
-    borderRadius: 8,
-  },
-  saveButtonText: {
-    color: '#FFFFFF',
-    fontWeight: '700',
   },
 });
